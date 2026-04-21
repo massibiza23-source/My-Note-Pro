@@ -93,6 +93,8 @@ export default function App() {
   const [currentPrompt, setCurrentPrompt] = useState<Partial<Prompt> | null>(null);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<string | null>(null);
+  const [categoryDeleteConfirmation, setCategoryDeleteConfirmation] = useState<string | null>(null);
 
   // Auth / PIN State
   const [isLocked, setIsLocked] = useState(() => {
@@ -153,10 +155,19 @@ export default function App() {
     setCurrentPrompt(null);
   };
 
-  const handleDelete = (id: string) => {
-    if (window.confirm('¿Estás seguro de que quieres eliminar esta nota?')) {
-      setPrompts(prev => prev.filter(p => p.id !== id));
+  const handleDelete = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setDeleteConfirmation(id);
+  };
+
+  const confirmDelete = () => {
+    if (!deleteConfirmation) return;
+    setPrompts(prev => prev.filter(p => p.id !== deleteConfirmation));
+    if (currentPrompt?.id === deleteConfirmation) {
+      setIsEditing(false);
+      setCurrentPrompt(null);
     }
+    setDeleteConfirmation(null);
   };
 
   const handleCopy = (content: string, id: string) => {
@@ -190,7 +201,7 @@ export default function App() {
       // Handle Image files
       if (file.type.startsWith('image/')) {
         reader.onload = (e) => {
-          resolve(`[Imagen detectada: ${file.name}] - DataURL: ${e.target?.result?.toString().slice(0, 50)}...`);
+          resolve(e.target?.result?.toString() || '');
         };
         reader.readAsDataURL(file);
         return;
@@ -210,29 +221,85 @@ export default function App() {
 
     setIsImporting(true);
     const newNotes: Prompt[] = [];
+    
+    // Determine the root folder name
+    const firstFilePath = files[0].webkitRelativePath;
+    const folderName = firstFilePath ? firstFilePath.split('/')[0] : 'Importación';
+    
+    // Create new category for this import
+    const newCategoryId = crypto.randomUUID();
+    const newCategory: Category = {
+      id: newCategoryId,
+      name: folderName,
+      icon: 'Compass',
+      color: 'text-zinc-600'
+    };
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      // Skip system files or hidden files
       if (file.name.startsWith('.')) continue;
 
       const content = await readFileContent(file);
+      const isHtml = file.name.endsWith('.html') || file.name.endsWith('.htm');
       
       newNotes.push({
         id: crypto.randomUUID(),
         title: file.name,
         content: content,
-        categoryId: 'misc',
-        tags: ['Importado', file.name.split('.').pop()?.toUpperCase() || 'FILE'],
+        categoryId: newCategoryId,
+        tags: ['Importado', file.name.split('.').pop()?.toUpperCase() || 'FILE', isHtml ? 'WEB' : ''].filter(Boolean),
         createdAt: Date.now(),
         updatedAt: Date.now(),
         variables: []
       });
     }
 
-    setPrompts(prev => [...newNotes, ...prev]);
+    if (newNotes.length > 0) {
+      setCategories(prev => [...prev, newCategory]);
+      setPrompts(prev => [...newNotes, ...prev]);
+      setSelectedCategoryId(newCategoryId);
+      alert(`${newNotes.length} archivos de "${folderName}" importados correctamente en su propia categoría.`);
+    }
+    
     setIsImporting(false);
-    alert(`${newNotes.length} archivos importados correctamente.`);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsImporting(true);
+    const newNotes: Prompt[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const content = await readFileContent(file);
+      const isHtml = file.name.endsWith('.html') || file.name.endsWith('.htm');
+      
+      newNotes.push({
+        id: crypto.randomUUID(),
+        title: file.name,
+        content: content,
+        categoryId: selectedCategoryId !== 'all' ? selectedCategoryId : 'misc',
+        tags: ['Importado', file.name.split('.').pop()?.toUpperCase() || 'FILE', isHtml ? 'WEB' : ''].filter(Boolean),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        variables: []
+      });
+    }
+
+    if (newNotes.length > 0) {
+      setPrompts(prev => [...newNotes, ...prev]);
+      alert(`${newNotes.length} archivo(s) importado(s) correctamente.`);
+    }
+    
+    setIsImporting(false);
+  };
+
+  const handlePreviewHtml = (content: string) => {
+    const blob = new Blob([content], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
   };
 
   const handleCreateCategory = () => {
@@ -296,11 +363,16 @@ export default function App() {
       alert('Esta categoría no se puede eliminar.');
       return;
     }
-    if (window.confirm('¿Estás seguro? Los prompts en esta categoría se moverán a "Varios".')) {
-      setCategories(prev => prev.filter(c => c.id !== id));
-      setPrompts(prev => prev.map(p => p.categoryId === id ? { ...p, categoryId: 'misc' } : p));
-      if (selectedCategoryId === id) setSelectedCategoryId('all');
-    }
+    setCategoryDeleteConfirmation(id);
+  };
+
+  const confirmDeleteCategory = () => {
+    if (!categoryDeleteConfirmation) return;
+    const id = categoryDeleteConfirmation;
+    setCategories(prev => prev.filter(c => c.id !== id));
+    setPrompts(prev => prev.map(p => p.categoryId === id ? { ...p, categoryId: 'misc' } : p));
+    if (selectedCategoryId === id) setSelectedCategoryId('all');
+    setCategoryDeleteConfirmation(null);
   };
 
   const getIcon = (iconName: string) => {
@@ -379,7 +451,96 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-ink pb-4 mb-6 md:mb-8 gap-4">
+        {/* Custom Deletion Modals */}
+        <AnimatePresence>
+          {deleteConfirmation && (
+            <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setDeleteConfirmation(null)}
+                className="absolute inset-0 bg-ink/80 backdrop-blur-md"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="relative w-full max-w-sm bg-white border border-ink overflow-hidden"
+              >
+                <div className="p-8 text-center text-ink">
+                  <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-100">
+                    <Trash2 size={32} />
+                  </div>
+                  <h3 className="font-serif text-2xl italic mb-3">¿Eliminar esta nota?</h3>
+                  <p className="text-[10px] font-bold uppercase letter-spacing-wide opacity-40 mb-8">Esta acción no se puede deshacer.</p>
+                  
+                  <div className="flex flex-col gap-3">
+                    <button 
+                      type="button"
+                      onClick={confirmDelete}
+                      className="w-full py-4 bg-red-600 text-white text-[10px] font-bold uppercase letter-spacing-wide hover:bg-red-700 transition-all shadow-lg active:scale-95"
+                    >
+                      Sí, Eliminar Ahora
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setDeleteConfirmation(null)}
+                      className="w-full py-4 bg-white border border-ink text-ink text-[10px] font-bold uppercase letter-spacing-wide hover:bg-gray-100 transition-all active:scale-95"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+
+          {categoryDeleteConfirmation && (
+            <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setCategoryDeleteConfirmation(null)}
+                className="absolute inset-0 bg-ink/80 backdrop-blur-md"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="relative w-full max-w-sm bg-white border border-ink overflow-hidden"
+              >
+                <div className="p-8 text-center text-ink">
+                  <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-6 border border-amber-100">
+                    <TagIcon size={32} />
+                  </div>
+                  <h3 className="font-serif text-2xl italic mb-3">¿Eliminar categoría?</h3>
+                  <p className="text-[10px] font-bold uppercase letter-spacing-wide opacity-40 mb-8">Las notas de esta categoría se moverán a "Varios".</p>
+                  
+                  <div className="flex flex-col gap-3">
+                    <button 
+                      type="button"
+                      onClick={confirmDeleteCategory}
+                      className="w-full py-4 bg-ink text-paper text-[10px] font-bold uppercase letter-spacing-wide hover:opacity-90 transition-all shadow-lg active:scale-95"
+                    >
+                      Eliminar Categoría
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setCategoryDeleteConfirmation(null)}
+                      className="w-full py-4 bg-white border border-ink text-ink text-[10px] font-bold uppercase letter-spacing-wide hover:bg-gray-100 transition-all active:scale-95"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-ink pb-4 mb-6 md:mb-8 gap-4">
         <div className="flex flex-col relative group">
           <span className="text-[9px] md:text-[10px] font-bold uppercase letter-spacing-wide mb-1 md:mb-2 opacity-60">The Registry</span>
           <div className="flex items-center gap-4">
@@ -464,33 +625,48 @@ export default function App() {
             </section>
           </nav>
 
-          <div className="md:mt-auto pt-6 md:pt-8 order-3 space-y-3">
-            <button 
-              onClick={() => {
-                setCurrentPrompt({ categoryId: selectedCategoryId !== 'all' ? selectedCategoryId : 'misc' });
-                setIsEditing(true);
-              }}
-              className="w-full bg-ink text-paper py-3.5 md:py-4 px-6 text-[10px] md:text-xs font-bold flex justify-between items-center group active:scale-[0.98] transition-all hover:bg-ink/90 shadow-lg md:shadow-none"
-            >
-              <span className="letter-spacing-wide">NUEVA NOTA</span>
-              <Plus size={16} />
-            </button>
+              <div className="md:mt-auto pt-6 md:pt-8 order-3 space-y-3">
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setCurrentPrompt({ categoryId: selectedCategoryId !== 'all' ? selectedCategoryId : 'misc' });
+                    setIsEditing(true);
+                  }}
+                  className="w-full bg-ink text-paper py-3.5 md:py-4 px-6 text-[10px] md:text-xs font-bold flex justify-between items-center group active:scale-[0.98] transition-all hover:bg-ink/90 shadow-lg md:shadow-none pointer-events-auto"
+                >
+                  <span className="letter-spacing-wide">NUEVA NOTA</span>
+                  <Plus size={16} />
+                </button>
 
-            <label className="w-full bg-paper border border-ink text-ink py-3.5 md:py-4 px-6 text-[10px] md:text-xs font-bold flex justify-between items-center group active:scale-[0.98] transition-all hover:bg-ink hover:text-paper cursor-pointer shadow-lg md:shadow-none">
-              <span className="letter-spacing-wide uppercase">
-                {isImporting ? 'PROCESANDO...' : 'Subir Carpeta'}
-              </span>
-              <Upload size={16} />
-              <input 
-                type="file" 
-                webkitdirectory="" 
-                directory="" 
-                className="hidden" 
-                onChange={handleFolderUpload}
-                disabled={isImporting}
-              />
-            </label>
-          </div>
+                <label className="w-full bg-paper border border-ink text-ink py-3.5 md:py-4 px-6 text-[10px] md:text-xs font-bold flex justify-between items-center group active:scale-[0.98] transition-all hover:bg-ink hover:text-paper cursor-pointer shadow-lg md:shadow-none pointer-events-auto">
+                  <span className="letter-spacing-wide uppercase">
+                    {isImporting ? 'PROCESANDO...' : 'Subir Archivos'}
+                  </span>
+                  <File size={16} />
+                  <input 
+                    type="file" 
+                    multiple
+                    className="hidden" 
+                    onChange={handleFileUpload}
+                    disabled={isImporting}
+                  />
+                </label>
+
+                <label className="w-full bg-paper border border-ink text-ink py-3.5 md:py-4 px-6 text-[10px] md:text-xs font-bold flex justify-between items-center group active:scale-[0.98] transition-all hover:bg-ink hover:text-paper cursor-pointer shadow-lg md:shadow-none pointer-events-auto">
+                  <span className="letter-spacing-wide uppercase">
+                    {isImporting ? 'PROCESANDO...' : 'Subir Carpeta'}
+                  </span>
+                  <Upload size={16} />
+                  <input 
+                    type="file" 
+                    webkitdirectory="" 
+                    directory="" 
+                    className="hidden" 
+                    onChange={handleFolderUpload}
+                    disabled={isImporting}
+                  />
+                </label>
+              </div>
         </aside>
 
         {/* Prompt List */}
@@ -518,13 +694,12 @@ export default function App() {
                   <div className="flex items-center gap-1">
                     <span className="opacity-30">Ver. 1.0</span>
                     <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(prompt.id);
-                      }}
-                      className="ml-2 text-ink/0 group-hover:text-ink/30 md:group-hover:opacity-100 hover:text-red-500 transition-colors opacity-100"
+                      type="button"
+                      onClick={(e) => handleDelete(prompt.id, e)}
+                      className="ml-2 p-2 -m-2 text-ink hover:text-red-600 transition-colors flex items-center justify-center relative z-20 pointer-events-auto active:scale-90"
+                      title="Eliminar Nota"
                     >
-                      <Trash2 size={12} className="md:text-current text-ink/20" />
+                      <Trash2 size={16} className="pointer-events-none" />
                     </button>
                   </div>
                 </div>
@@ -554,6 +729,18 @@ export default function App() {
                     >
                       {copyStatus === prompt.id ? 'COPIADO' : 'COPIAR'}
                     </button>
+                    {prompt.tags.includes('HTML') && (
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePreviewHtml(prompt.content);
+                        }}
+                        className="p-1 px-2 border border-ink text-[8px] md:text-[9px] font-bold uppercase hover:bg-ink hover:text-paper transition-all flex items-center gap-1"
+                      >
+                        <Compass size={10} />
+                        VER
+                      </button>
+                    )}
                     <button className="md:hidden p-1 px-2 border border-ink text-[10px]">
                       <Edit3 size={10} />
                     </button>
@@ -582,8 +769,41 @@ export default function App() {
               
               <div className="flex-1 overflow-y-auto custom-scrollbar">
                 <h4 className="font-serif text-2xl italic mb-4 leading-tight border-b border-ink/10 pb-4">{filteredPrompts[0].title}</h4>
-                <div className="font-serif text-sm leading-relaxed mb-8 opacity-80 whitespace-pre-wrap">
-                  {filteredPrompts[0].content}
+                <div className="font-serif text-sm leading-relaxed mb-8 opacity-80 overflow-hidden">
+                  {filteredPrompts[0].tags.includes('HTML') ? (
+                    <div className="w-full border border-ink/10 h-[600px] bg-white rounded-sm overflow-hidden flex flex-col shadow-inner">
+                      <div className="bg-zinc-100 px-3 py-2 text-[8px] font-mono border-b border-ink/10 flex justify-between items-center capitalize">
+                        <div className="flex items-center gap-2">
+                          <Compass size={10} className="text-ink/40" />
+                          <span>Página Renderizada</span>
+                        </div>
+                        <div className="flex gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-red-400"></div>
+                          <div className="w-1.5 h-1.5 rounded-full bg-amber-400"></div>
+                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+                        </div>
+                      </div>
+                      <iframe 
+                        title="HTML Preview"
+                        srcDoc={filteredPrompts[0].content} 
+                        className="w-full flex-1 border-none bg-white"
+                        sandbox="allow-scripts"
+                      />
+                    </div>
+                  ) : (filteredPrompts[0].tags.includes('JPG') || filteredPrompts[0].tags.includes('PNG') || filteredPrompts[0].tags.includes('JPEG')) && filteredPrompts[0].content.startsWith('data:image/') ? (
+                    <div className="w-full border border-ink/10 p-2 bg-paper flex items-center justify-center min-h-[300px]">
+                      <img 
+                        src={filteredPrompts[0].content} 
+                        alt={filteredPrompts[0].title}
+                        className="max-w-full max-h-[500px] object-contain shadow-md"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap">
+                      {filteredPrompts[0].content}
+                    </div>
+                  )}
                 </div>
                 
                 <div className="space-y-4">
@@ -601,21 +821,37 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-8 pt-6 border-t border-ink flex gap-2">
+              <div className="mt-8 pt-6 border-t border-ink flex flex-wrap gap-2">
                 <button 
                   onClick={() => handleCopy(filteredPrompts[0].content, filteredPrompts[0].id)}
                   className="flex-1 py-3 border border-ink text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-paper transition-all"
                 >
                   Quick Copy
                 </button>
+                {filteredPrompts[0].tags.includes('HTML') && (
+                  <button 
+                    onClick={() => handlePreviewHtml(filteredPrompts[0].content)}
+                    className="flex-1 py-3 border border-ink text-[10px] font-bold uppercase tracking-widest bg-emerald-50 hover:bg-emerald-500 hover:text-white transition-all"
+                  >
+                    Abrir en Navegador
+                  </button>
+                )}
                 <button 
                   onClick={() => {
                     setCurrentPrompt(filteredPrompts[0]);
                     setIsEditing(true);
                   }}
-                  className="flex-1 py-3 bg-ink text-paper text-[10px] font-bold uppercase tracking-widest hover:opacity-90 transition-all"
+                  className="flex-1 py-3 bg-ink text-paper text-[10px] font-bold uppercase tracking-widest hover:opacity-90 transition-all font-mono"
                 >
                   Full Edit
+                </button>
+                <button 
+                  type="button"
+                  onClick={(e) => handleDelete(filteredPrompts[0].id, e)}
+                  className="w-full md:w-auto px-4 py-3 border border-red-200 text-red-500 text-[10px] font-bold uppercase tracking-widest hover:bg-red-500 hover:text-white transition-all flex items-center justify-center font-mono"
+                  title="Eliminar Nota"
+                >
+                  <Trash2 size={14} />
                 </button>
               </div>
             </div>
@@ -814,8 +1050,10 @@ export default function App() {
                             </button>
                           )}
                           <button 
+                            type="button"
                             onClick={() => handleDeleteCategory(cat.id)}
                             className="p-1.5 border border-ink/20 hover:border-red-500 hover:text-red-500 transition-all"
+                            title="Eliminar Categoría"
                           >
                             <Trash2 size={12} />
                           </button>
