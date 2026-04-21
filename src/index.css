@@ -1,0 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Helvetica Neue", "Inter", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Georgia", serif;
+  
+  --color-ink: #1A1A1A;
+  --color-paper: #FDFCFB;
+}
+
+@layer base {
+  body {
+    @apply antialiased scroll-smooth bg-paper text-ink selection:bg-ink selection:text-paper;
+  }
+}
+
+@layer utilities {
+  .letter-spacing-tight { letter-spacing: -0.02em; }
+  .letter-spacing-wide { letter-spacing: 0.1em; }
+}
