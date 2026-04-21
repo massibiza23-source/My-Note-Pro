@@ -14,4 +14,5 @@ export interface Prompt {
   createdAt: number;
   updatedAt: number;
   variables: string[];
+  thumbnail?: string;
 }

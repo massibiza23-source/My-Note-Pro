@@ -27,9 +27,11 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { Category, Prompt } from './types';
 import * as XLSX from 'xlsx';
+import { db } from './db';
+import { useLiveQuery } from 'dexie-react-hooks';
 
-// Initial data
-const DEFAULT_CATEGORIES: Category[] = [
+// Initial categories if DB is empty
+const INITIAL_CATEGORIES: Category[] = [
   { id: 'all', name: 'Todos', icon: 'Layout', color: 'text-zinc-600' },
   { id: 'coding', name: 'Programación', icon: 'Code', color: 'text-blue-500' },
   { id: 'writing', name: 'Escritura', icon: 'Edit3', color: 'text-amber-500' },
@@ -39,51 +41,10 @@ const DEFAULT_CATEGORIES: Category[] = [
 ];
 
 export default function App() {
-  const [prompts, setPrompts] = useState<Prompt[]>(() => {
-    const saved = localStorage.getItem('prompt_vault_data');
-    if (saved) return JSON.parse(saved);
-    
-    // Default initial prompts
-    return [
-      {
-        id: '1',
-        title: 'Asistente de Código Python',
-        content: 'Actúa como un experto en Python. Revisa el siguiente código para encontrar errores de lógica y optimizar el rendimiento: {{codigo}}',
-        categoryId: 'coding',
-        tags: ['Python', 'Optimización'],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        variables: ['codigo']
-      },
-      {
-        id: '2',
-        title: 'Escritura Creativa: Sci-Fi',
-        content: 'Genera una idea para una historia de ciencia ficción corta donde el protagonista descubre que {{secreto}}. El tono debe ser {{tono}}.',
-        categoryId: 'creative',
-        tags: ['Sci-Fi', 'Storytelling'],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        variables: ['secreto', 'tono']
-      },
-      {
-        id: '3',
-        title: 'Clonador de Apps AI Studio',
-        content: 'Actúa como un arquitecto de software experto en Google AI Studio. Analiza el código fuente de esta aplicación: {{codigo_app}}. Tu tarea es generar un plan detallado para replicar esta funcionalidad en un nuevo proyecto. Incluye: 1. Dependencias necesarias en package.json. 2. Permisos requeridos en metadata.json. 3. Estructura de archivos recomendada. 4. Explicación de las variables de entorno {{env_vars}}.',
-        categoryId: 'coding',
-        tags: ['AI Studio', 'Arquitectura', 'Clonación'],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        variables: ['codigo_app', 'env_vars']
-      }
-    ];
-  });
-  
-  const [categories, setCategories] = useState<Category[]>(() => {
-    const saved = localStorage.getItem('prompt_vault_categories');
-    if (saved) return JSON.parse(saved);
-    return DEFAULT_CATEGORIES;
-  });
-  
+  // Dexie Live Queries
+  const prompts = useLiveQuery(() => db.prompts.toArray(), []) || [];
+  const categories = useLiveQuery(() => db.categories.toArray(), []) || [];
+
   const [selectedCategoryId, setSelectedCategoryId] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -107,13 +68,32 @@ export default function App() {
   const [confirmPin, setConfirmPin] = useState('');
   const [error, setError] = useState('');
 
+  // Migration and Initialization
   useEffect(() => {
-    localStorage.setItem('prompt_vault_data', JSON.stringify(prompts));
-  }, [prompts]);
+    const initDB = async () => {
+      const count = await db.categories.count();
+      if (count === 0) {
+        // Try to migrate from localStorage first
+        const savedCategories = localStorage.getItem('prompt_vault_categories');
+        const savedPrompts = localStorage.getItem('prompt_vault_data');
+        
+        if (savedCategories) {
+          await db.categories.bulkAdd(JSON.parse(savedCategories));
+        } else {
+          await db.categories.bulkAdd(INITIAL_CATEGORIES);
+        }
 
-  useEffect(() => {
-    localStorage.setItem('prompt_vault_categories', JSON.stringify(categories));
-  }, [categories]);
+        if (savedPrompts) {
+          await db.prompts.bulkAdd(JSON.parse(savedPrompts));
+        }
+        
+        // Clear localStorage after migration to free up space
+        localStorage.removeItem('prompt_vault_data');
+        localStorage.removeItem('prompt_vault_categories');
+      }
+    };
+    initDB();
+  }, []);
 
   const filteredPrompts = useMemo(() => {
     return prompts.filter(p => {
@@ -130,7 +110,7 @@ export default function App() {
     return matches ? Array.from(new Set(matches.map(m => m.slice(2, -2).trim()))) : [];
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentPrompt?.title || !currentPrompt?.content) return;
 
@@ -146,9 +126,9 @@ export default function App() {
     };
 
     if (currentPrompt.id) {
-      setPrompts(prev => prev.map(p => p.id === newPrompt.id ? newPrompt : p));
+      await db.prompts.put(newPrompt);
     } else {
-      setPrompts(prev => [newPrompt, ...prev]);
+      await db.prompts.add(newPrompt);
     }
 
     setIsEditing(false);
@@ -160,9 +140,9 @@ export default function App() {
     setDeleteConfirmation(id);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteConfirmation) return;
-    setPrompts(prev => prev.filter(p => p.id !== deleteConfirmation));
+    await db.prompts.delete(deleteConfirmation);
     if (currentPrompt?.id === deleteConfirmation) {
       setIsEditing(false);
       setCurrentPrompt(null);
@@ -220,13 +200,9 @@ export default function App() {
     if (!files || files.length === 0) return;
 
     setIsImporting(true);
-    const newNotes: Prompt[] = [];
-    
-    // Determine the root folder name
     const firstFilePath = files[0].webkitRelativePath;
     const folderName = firstFilePath ? firstFilePath.split('/')[0] : 'Importación';
     
-    // Create new category for this import
     const newCategoryId = crypto.randomUUID();
     const newCategory: Category = {
       id: newCategoryId,
@@ -235,12 +211,14 @@ export default function App() {
       color: 'text-zinc-600'
     };
 
+    const newNotes: Prompt[] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (file.name.startsWith('.')) continue;
 
       const content = await readFileContent(file);
       const isHtml = file.name.endsWith('.html') || file.name.endsWith('.htm');
+      const thumbnail = await generateThumbnail(file, content);
       
       newNotes.push({
         id: crypto.randomUUID(),
@@ -250,15 +228,16 @@ export default function App() {
         tags: ['Importado', file.name.split('.').pop()?.toUpperCase() || 'FILE', isHtml ? 'WEB' : ''].filter(Boolean),
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        variables: []
+        variables: [],
+        thumbnail
       });
     }
 
     if (newNotes.length > 0) {
-      setCategories(prev => [...prev, newCategory]);
-      setPrompts(prev => [...newNotes, ...prev]);
+      await db.categories.add(newCategory);
+      await db.prompts.bulkAdd(newNotes);
       setSelectedCategoryId(newCategoryId);
-      alert(`${newNotes.length} archivos de "${folderName}" importados correctamente en su propia categoría.`);
+      alert(`${newNotes.length} archivos de "${folderName}" importados correctamente.`);
     }
     
     setIsImporting(false);
@@ -275,6 +254,7 @@ export default function App() {
       const file = files[i];
       const content = await readFileContent(file);
       const isHtml = file.name.endsWith('.html') || file.name.endsWith('.htm');
+      const thumbnail = await generateThumbnail(file, content);
       
       newNotes.push({
         id: crypto.randomUUID(),
@@ -284,12 +264,13 @@ export default function App() {
         tags: ['Importado', file.name.split('.').pop()?.toUpperCase() || 'FILE', isHtml ? 'WEB' : ''].filter(Boolean),
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        variables: []
+        variables: [],
+        thumbnail
       });
     }
 
     if (newNotes.length > 0) {
-      setPrompts(prev => [...newNotes, ...prev]);
+      await db.prompts.bulkAdd(newNotes);
       alert(`${newNotes.length} archivo(s) importado(s) correctamente.`);
     }
     
@@ -302,14 +283,14 @@ export default function App() {
     window.open(url, '_blank');
   };
 
-  const handleCreateCategory = () => {
+  const handleCreateCategory = async () => {
     const newCategory: Category = {
       id: crypto.randomUUID(),
       name: 'Nueva Categoría',
       icon: 'Compass',
       color: 'text-zinc-600'
     };
-    setCategories(prev => [...prev, newCategory]);
+    await db.categories.add(newCategory);
     setEditingCategoryId(newCategory.id);
     setEditingCategoryName(newCategory.name);
   };
@@ -319,9 +300,9 @@ export default function App() {
     setEditingCategoryName(cat.name);
   };
 
-  const handleSaveCategoryName = (id: string) => {
+  const handleSaveCategoryName = async (id: string) => {
     if (!editingCategoryName.trim()) return;
-    setCategories(prev => prev.map(c => c.id === id ? { ...c, name: editingCategoryName.trim() } : c));
+    await db.categories.update(id, { name: editingCategoryName.trim() });
     setEditingCategoryId(null);
   };
 
@@ -358,6 +339,41 @@ export default function App() {
     setIsLocked(true);
   };
 
+  const generateThumbnail = (file: File, content: string): Promise<string | undefined> => {
+    return new Promise((resolve) => {
+      if (file.type.startsWith('image/')) {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_SIZE = 160;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
+            }
+          } else {
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        };
+        img.onerror = () => resolve(undefined);
+        img.src = content;
+        return;
+      }
+      resolve(undefined);
+    });
+  };
+
   const handleDeleteCategory = (id: string) => {
     if (id === 'all' || id === 'misc') {
       alert('Esta categoría no se puede eliminar.');
@@ -366,11 +382,15 @@ export default function App() {
     setCategoryDeleteConfirmation(id);
   };
 
-  const confirmDeleteCategory = () => {
+  const confirmDeleteCategory = async () => {
     if (!categoryDeleteConfirmation) return;
     const id = categoryDeleteConfirmation;
-    setCategories(prev => prev.filter(c => c.id !== id));
-    setPrompts(prev => prev.map(p => p.categoryId === id ? { ...p, categoryId: 'misc' } : p));
+    
+    await db.transaction('rw', db.categories, db.prompts, async () => {
+      await db.categories.delete(id);
+      await db.prompts.where('categoryId').equals(id).modify({ categoryId: 'misc' });
+    });
+
     if (selectedCategoryId === id) setSelectedCategoryId('all');
     setCategoryDeleteConfirmation(null);
   };
@@ -706,15 +726,45 @@ export default function App() {
                   </div>
                 </div>
                 
-                <h3 className="text-lg md:text-xl font-bold leading-tight md:leading-none mb-1 md:mb-2 tracking-tight md:group-hover:underline decoration-1 underline-offset-4">{prompt.title}</h3>
-                <div className="flex gap-2 mb-2">
-                  <span className="text-[7px] md:text-[8px] font-bold uppercase opacity-40 px-1 border border-ink/10 rounded-sm">
-                    {categories.find(c => c.id === prompt.categoryId)?.name || 'Varios'}
-                  </span>
+                <div className="flex gap-4">
+                  {(prompt.thumbnail || prompt.tags.includes('HTML')) && (
+                    <div className="w-16 h-16 md:w-20 md:h-20 shrink-0 border border-ink/10 overflow-hidden bg-gray-50 flex items-center justify-center relative group-hover:border-ink/30 transition-all">
+                      {prompt.thumbnail ? (
+                        <img 
+                          src={prompt.thumbnail} 
+                          className="object-cover w-full h-full" 
+                          referrerPolicy="no-referrer" 
+                          alt="preview"
+                        />
+                      ) : prompt.tags.includes('HTML') ? (
+                        <div className="absolute inset-0 scale-[0.25] origin-top-left w-[400%] h-[400%] pointer-events-none opacity-40 group-hover:opacity-60 transition-opacity translate-x-1 translate-y-1">
+                          <iframe 
+                            srcDoc={prompt.content} 
+                            className="w-full h-full border-0 pointer-events-none"
+                            title="peek"
+                          />
+                        </div>
+                      ) : null}
+                      {!prompt.thumbnail && prompt.tags.includes('HTML') && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <Compass size={14} className="opacity-20" />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-lg md:text-xl font-bold leading-tight md:leading-none mb-1 md:mb-2 tracking-tight md:group-hover:underline decoration-1 underline-offset-4 truncate">{prompt.title}</h3>
+                    <div className="flex gap-2 mb-2">
+                      <span className="text-[7px] md:text-[8px] font-bold uppercase opacity-40 px-1 border border-ink/10 rounded-sm">
+                        {categories.find(c => c.id === prompt.categoryId)?.name || 'Varios'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] md:text-xs leading-relaxed opacity-70 line-clamp-2 italic font-serif">
+                      "{prompt.content}"
+                    </p>
+                  </div>
                 </div>
-                <p className="text-[11px] md:text-xs leading-relaxed opacity-70 line-clamp-2 italic font-serif">
-                  "{prompt.content}"
-                </p>
                 
                 <div className="mt-3 md:mt-4 flex items-center justify-between">
                   <div className="flex gap-1">
