@@ -590,7 +590,7 @@ export default function App() {
                   <span className="md:hidden">Editar</span>
                 </button>
               </div>
-              <ul className="grid grid-cols-2 md:flex md:flex-col gap-2 md:gap-1 text-[10px] md:text-xs font-bold md:font-normal uppercase md:capitalize">
+              <ul className="grid grid-cols-2 md:flex md:flex-col gap-2 md:gap-1 text-[10px] md:text-xs font-bold md:font-normal">
                 {categories.map((cat, idx) => (
                   <li key={cat.id}>
                     <button
@@ -601,7 +601,7 @@ export default function App() {
                         : 'border-ink/10 md:border-transparent hover:border-ink/30 text-ink/60 hover:text-ink'
                       }`}
                     >
-                      <span className="flex items-center gap-2 truncate">
+                      <span className="flex items-center gap-2 truncate uppercase md:capitalize">
                         <span className="hidden md:inline opacity-30 font-mono text-[9px]">{String(idx).padStart(2, '0')}.</span> {cat.name}
                       </span>
                       <span className="hidden md:inline opacity-40 font-normal ml-2">
@@ -634,7 +634,9 @@ export default function App() {
                   }}
                   className="w-full bg-ink text-paper py-3.5 md:py-4 px-6 text-[10px] md:text-xs font-bold flex justify-between items-center group active:scale-[0.98] transition-all hover:bg-ink/90 shadow-lg md:shadow-none pointer-events-auto"
                 >
-                  <span className="letter-spacing-wide">NUEVA NOTA</span>
+                  <span className="letter-spacing-wide uppercase">
+                    Nueva Nota {selectedCategoryId !== 'all' ? `en ${categories.find(c => c.id === selectedCategoryId)?.name}` : ''}
+                  </span>
                   <Plus size={16} />
                 </button>
 
@@ -704,7 +706,12 @@ export default function App() {
                   </div>
                 </div>
                 
-                <h3 className="text-lg md:text-xl font-bold leading-tight md:leading-none mb-2 md:mb-3 tracking-tight md:group-hover:underline decoration-1 underline-offset-4">{prompt.title}</h3>
+                <h3 className="text-lg md:text-xl font-bold leading-tight md:leading-none mb-1 md:mb-2 tracking-tight md:group-hover:underline decoration-1 underline-offset-4">{prompt.title}</h3>
+                <div className="flex gap-2 mb-2">
+                  <span className="text-[7px] md:text-[8px] font-bold uppercase opacity-40 px-1 border border-ink/10 rounded-sm">
+                    {categories.find(c => c.id === prompt.categoryId)?.name || 'Varios'}
+                  </span>
+                </div>
                 <p className="text-[11px] md:text-xs leading-relaxed opacity-70 line-clamp-2 italic font-serif">
                   "{prompt.content}"
                 </p>
